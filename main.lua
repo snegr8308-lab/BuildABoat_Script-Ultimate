@@ -327,6 +327,7 @@ local WindUI = loadstring(game:HttpGet("https://github.com/Footagesus/WindUI/rel
 local Window = WindUI:CreateWindow({
    Title = "Build a boat auto build",
    Icon = "rbxaassetid://73632565856418",
+   IconThemed = true,
    Author = "by Enormus"
 })
 
