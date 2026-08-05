@@ -325,10 +325,9 @@ end
 local WindUI = loadstring(game:HttpGet("https://github.com/Footagesus/WindUI/releases/latest/download/main.lua"))()
 
 local Window = WindUI:CreateWindow({
-   Title = "Build a boat auto build",
-   Icon = "rbxaassetid://73632565856418",
-   IconThemed = true,
-   Author = "by Enormus"
+   Title = "Build A Boat Hub",
+   Icon = "rbxassetid://110383444005864",
+   Author = "by Sirius & WindUI"
 })
 
 -- Ставим крутую тему по умолчанию
@@ -397,6 +396,7 @@ end)
 -- ==========================================
 local autoBuildTab = Window:Tab({Title = "Building", Icon = "hammer"})
 local autoFarmTab = Window:Tab({Title = "Auto Farm", Icon = "coins"})
+local funTab = Window:Tab({Title = "Fun Tab", Icon = "smile"})
 local settingsTab = Window:Tab({Title = "UI Settings", Icon = "settings"}) -- Новая вкладка для тем
 
 -- НАСТРОЙКИ UI (Выбор тем из скриншота)
