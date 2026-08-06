@@ -3,669 +3,413 @@ local vim = game:GetService("VirtualInputManager")
 local players = game:GetService("Players")
 local TS = game:GetService("TweenService")
 local workspace = game:GetService("Workspace")
-local replicatedStorage = game:GetService("ReplicatedStorage")
 local runService = game:GetService("RunService")
+local coreGui = game:GetService("CoreGui")
+local httpService = game:GetService("HttpService")
 
--- local player
 local player = players.LocalPlayer
 local character = player.Character or player.CharacterAdded:Wait()
 local humanoid = character:WaitForChild("Humanoid")
 local HRP = character:WaitForChild("HumanoidRootPart")
 
--- flags --
-local tweening = false
+-- Universal HTTP Request for Discord Webhooks --
+local httpRequest = (syn and syn.request) or (http and http.request) or http_request or (fluxus and fluxus.request) or request
 
--- auto farm values --
+-- flags & values --
+local tweening = false
 local index = 1
 
--- list for special blocks like glue that have multiple welds
-local specialList = {"Glue"}
---paths
+-- WindUI Initialization --
+local Version = "1.6.66"
+local WindUI = loadstring(game:HttpGet("https://github.com/Footagesus/WindUI/releases/download/" .. Version .. "/main.lua"))()
+
+local Window = WindUI:CreateWindow({
+    Title = "Profix hub AutoBuild",
+    Icon = "rbxassetid://119122088865300",
+    Author = "by Enormus ",
+    Folder = "MySuperHub",
+    NewElements = true,
+    Size = UDim2.fromOffset(580, 520),
+    ToggleKey = Enum.KeyCode.LeftShift,
+    Transparent = true,
+    Theme = "Dark",
+    Resizable = true,
+    SideBarWidth = 200,
+    BackgroundImageTransparency = 0.2,
+    HideSearchBar = true,
+    ScrollBarEnabled = false,
+})
+
+-- Injecting Custom Font (Jura)
+task.spawn(function()
+    task.wait(1.5)
+    for _, gui in pairs(coreGui:GetChildren()) do
+        if gui.Name == "WindUI" then
+            for _, element in pairs(gui:GetDescendants()) do
+                if element:IsA("TextLabel") or element:IsA("TextButton") or element:IsA("TextBox") then
+                    pcall(function() element.Font = Enum.Font.Jura end)
+                end
+            end
+        end
+    end
+end)
+
+-- Execution Popup
+WindUI:Popup({
+    Title = "Script Loaded",
+    Icon = "Shield",
+    Content = "Profix hub AutoBuild activated",
+    Buttons = { { Title = "Continue", Icon = "arrow-right", Callback = function() end, Variant = "Primary" } }
+})
+
+-- Info Tab
+local InfoTab = Window:Tab({ Title = "Information", Icon = "user", ShowTabTitle = true })
+
+local accountAge = player.AccountAge .. " days"
+local avatarImage = "rbxthumb://type=AvatarHeadShot&id=" .. player.UserId .. "&w=420&h=420"
+local execName = identifyexecutor and identifyexecutor() or "Unknown"
+
+InfoTab:Paragraph({
+    Title = "Welcome, " .. player.DisplayName .. "!",
+    Desc = "Executor: " .. execName .. "\nAccount Age: " .. accountAge .. "\nUserID: " .. player.UserId,
+    Image = avatarImage,
+    ImageSize = 80
+})
+
+local FPSTag = Window:Tag({ Title = "FPS: 0", Color = Color3.fromRGB(100, 150, 255) })
+local lastUpdate, frameCount = tick(), 0
+runService.RenderStepped:Connect(function()
+    frameCount += 1
+    local now = tick()
+    if now - lastUpdate >= 1 then
+        local fps = math.floor(frameCount / (now - lastUpdate))
+        FPSTag:SetTitle("FPS: " .. fps)
+        if fps >= 50 then FPSTag:SetColor(Color3.fromRGB(0, 255, 0))
+        elseif fps >= 30 then FPSTag:SetColor(Color3.fromRGB(255, 200, 0))
+        else FPSTag:SetColor(Color3.fromRGB(255, 0, 0)) end
+        frameCount = 0; lastUpdate = now
+    end
+end)
+
+local PingTag = Window:Tag({ Title = "Ping: 0ms", Color = Color3.fromRGB(100, 200, 255) })
+task.spawn(function()
+    while task.wait(2) do
+        local success, ping = pcall(function() return math.floor(game:GetService("Stats").Network.ServerStatsItem["Data Ping"]:GetValue()) end)
+        if success and ping then
+            PingTag:SetTitle("Ping: " .. ping .. "ms")
+        end
+    end
+end)
 local blockData = player:WaitForChild("Data")
 local blocksFolder = workspace:WaitForChild("Blocks")
--- variable to track paste percentage and show the player
-local pastePercent = 0
--- variable to track how many used of each block there is ( doesnt scale with count unfortunately)
 local usedList = {}
-
--- player input
-local selectedBase = nil
-local autofarm = false
-local rescaleClick = false
-local playerToBring = nil
-local ignoreAnchored = true
-local sitInMouseClickSeatToggle = false
-
--- auto build
+local selectedBase, autofarm, ignoreAnchored = nil, false, true
 local clipboard = nil
+
+local previewFolder = Instance.new("Folder")
+previewFolder.Name = "BuildPreview"
+previewFolder.Parent = workspace.CurrentCamera
 
 local function getBlockID(name)
     return blockData:FindFirstChild(name) and blockData:FindFirstChild(name).Value or 9
 end
 
-local function setTransparency(transparencyWanted : number, block : Model) : ()
-    if not block then return end
-    if block.PPart.Transparency == transparencyWanted then return end
+local function setTransparency(transparencyWanted, block)
+    if not block or block.PPart.Transparency == transparencyWanted then return end
     local calls = transparencyWanted / 0.25
-    local tool
-    if character:FindFirstChild("PropertiesTool") then
-        tool = character["PropertiesTool"]
-    else
-        humanoid:EquipTool(player.Backpack.PropertiesTool)
-        task.wait()
-        tool = character.PropertiesTool
-    end
-
-    local args = { "Transparency", { block } }
-
-    task.spawn(function()
-        for i = 1,calls do
-            tool.SetPropertieRF:InvokeServer(unpack(args))
-        end
-    end)
+    local tool = character:FindFirstChild("PropertiesTool") or humanoid:EquipTool(player.Backpack.PropertiesTool) or character.PropertiesTool
+    task.spawn(function() for i = 1, calls do tool.SetPropertieRF:InvokeServer("Transparency", { block }) end end)
 end
 
-local function setAnchored(block : Model)
+local function rescaleBlock(block, newPos, newSize)
     if not block then return end
-    local tool
-    if character:FindFirstChild("PropertiesTool") then
-        tool = character["PropertiesTool"]
-    else
-        humanoid:EquipTool(player.Backpack.PropertiesTool)
-        task.wait()
-        tool = character.PropertiesTool
-    end
-
-    local args = { "Anchored", { block } }
-    task.spawn(function()
-        tool.SetPropertieRF:InvokeServer(unpack(args))
-    end)
+    local tool = character:FindFirstChild("ScalingTool") or humanoid:EquipTool(player.Backpack.ScalingTool) or character.ScalingTool
+    task.spawn(function() tool.RF:InvokeServer(block, newSize, newPos) end)
 end
 
-local function rescaleBlock(block:Model,newPos:CFrame,newSize:Vector3) : ()
-    if not block then 
-        print("Block Not Found, Function rescaleBlock")
-        return 
-    end
-    local tool
-    if character:FindFirstChild("ScalingTool") then
-        tool = character["ScalingTool"]
-    else
-        humanoid:EquipTool(player.Backpack.ScalingTool)
-        task.wait()
-        tool = character.ScalingTool
-    end
-
-    local args = { block, newSize, newPos }
-    task.spawn(function()
-        tool.RF:InvokeServer(unpack(args))
-    end)
-end
-
-local function getPlayerZone(playerInstance : Player) : BasePart
+local function getPlayerZone(playerInstance)
     local teamColor = playerInstance.TeamColor
     for _,v in pairs(workspace:GetChildren()) do
-        if v:FindFirstChild("TeamColor") and v.TeamColor.Value then
-            if v.TeamColor.Value == teamColor then
-                return v
-            end
-        end
+        if v:FindFirstChild("TeamColor") and v.TeamColor.Value == teamColor then return v end
     end
-    print("Base Not Found for player: ".. playerInstance.Name)
     return nil
 end
 
-local function placeBlock(name : string,pos : CFrame,relativeTo : BasePart,Anchored : boolean) : ()
-    local tool
-    if character:FindFirstChild("BuildingTool") then
-        tool = character["BuildingTool"]
-    else
-        humanoid:EquipTool(player.Backpack.BuildingTool)
-        task.wait()
-        tool = character.BuildingTool
-    end
+local function placeBlock(name, pos, relativeTo, Anchored)
+    local tool = character:FindFirstChild("BuildingTool") or humanoid:EquipTool(player.Backpack.BuildingTool) or character.BuildingTool
     if not relativeTo then relativeTo = getPlayerZone(player) end
-    local args = {
-        name,
-        getBlockID(name),
-        relativeTo,
-        relativeTo and relativeTo.CFrame:ToObjectSpace(pos) or CFrame.new(),
-        ignoreAnchored and true or Anchored,
-        pos,
-        false, 
-    }
-    task.spawn(function()
-        tool.RF:InvokeServer(unpack(args))
-    end)
+    task.spawn(function() tool.RF:InvokeServer(name, getBlockID(name), relativeTo, relativeTo and relativeTo.CFrame:ToObjectSpace(pos) or CFrame.new(), ignoreAnchored and true or Anchored, pos, false) end)
 end
 
-local function paintBlock(block : Model, color : Color3)
-    if not block then return end
-    if not block:FindFirstChild("PPart") then return end
-    if block.PPart.Color == color then return end
-    local tool
-    if character:FindFirstChild("PaintingTool") then
-        tool = character["PaintingTool"]
-    else
-        humanoid:EquipTool(player.Backpack.PaintingTool)
-        task.wait()
-        tool = character.PaintingTool
-    end
-    local args = { { block, color } }
-    task.spawn(function()
-        tool.RF:InvokeServer(args)
-    end)
+local function paintBlock(block, color)
+    if not block or not block:FindFirstChild("PPart") or block.PPart.Color == color then return end
+    local tool = character:FindFirstChild("PaintingTool") or humanoid:EquipTool(player.Backpack.PaintingTool) or character.PaintingTool
+    task.spawn(function() tool.RF:InvokeServer({{block, color}}) end)
 end
 
-local function getJoint(model : Model) : JointInstance?
-    for _,v in pairs(model.PPart:GetChildren()) do
-        if v:IsA("Snap") or v:IsA("Weld") then
-            if v.Part1 then 
-                if not (v.Part1.Parent == model) then
-                    return v.Part1
-                end
-            end
-        end
-    end
-    return getPlayerZone(player)
+local function getNewBlockPos(hisBase, block, myBase)
+    if not block or not block:FindFirstChild("PPart") then return CFrame.new() end
+    if not hisBase or not myBase then return block.PPart.CFrame end
+    return myBase.CFrame * hisBase.CFrame:ToObjectSpace(block.PPart.CFrame)
 end
 
-local function getNewBlockPos(hisBase : BasePart?, block : Model, myBase : BasePart?) : CFrame
-    if not block or not block:FindFirstChild("PPart") then
-        return CFrame.new()
-    end
-
-    if not hisBase or not myBase then
-        return block.PPart.CFrame
-    end
-
-    local offset = hisBase.CFrame:ToObjectSpace(block.PPart.CFrame)
-    return myBase.CFrame * offset
-end
-local function copyBuild(blocks : Folder) : table
-    local t = {}
-    local myBase = getPlayerZone(player)
-    local hisBase = getPlayerZone(players:FindFirstChild(blocks.Name))
-
+local function copyBuild(blocks)
+    local t, myBase, hisBase = {}, getPlayerZone(player), getPlayerZone(players:FindFirstChild(blocks.Name))
     for _,block in ipairs(blocks:GetChildren()) do
-        if block:FindFirstChild("PPart") then
-            if not (getBlockID(block.Name) == 0 or (usedList[block.Name] or 0) > getBlockID(block.Name)) then 
-                local relative = getJoint(block)
-                relative = relative == hisBase and myBase or relative
-                if usedList[block.Name] then
-                    usedList[block.Name] += 1
-                else
-                    usedList[block.Name] = 1
-                end
-                table.insert(t, {
-                    Name = block.Name,
-                    Pos = getNewBlockPos(hisBase, block, myBase),
-                    Relative = getPlayerZone(player),
-                    Transparency = block.PPart.Transparency,
-                    Anchored = block.PPart.Anchored,
-                    Size = block.PPart.Size,
-                    Color = block.PPart.Color
-                })
-            else
-                print("You Dont Have Enough: ".. block.Name .. "s")
-            end
+        if block:FindFirstChild("PPart") and not (getBlockID(block.Name) == 0 or (usedList[block.Name] or 0) > getBlockID(block.Name)) then 
+            usedList[block.Name] = (usedList[block.Name] or 0) + 1
+            table.insert(t, {
+                Name = block.Name, Pos = getNewBlockPos(hisBase, block, myBase), Relative = getPlayerZone(player),
+                Transparency = block.PPart.Transparency, Anchored = block.PPart.Anchored, Size = block.PPart.Size, Color = block.PPart.Color
+            })
         end
     end
     return t
 end
 
-local function getMissingBlocks(expectedList, createdList)
-    local missing = {}
-    for i, v in ipairs(expectedList) do
-        local found = false
-        for _, b in ipairs(createdList) do
-            if b and b:FindFirstChild("PPart") and (b.Name == v.Name) then
-                found = true
-                break
-            end
-        end
-        if not found then
-            table.insert(missing, {Index = i, Name = v.Name, Pos = v.Pos})
-        end
-    end
-    return missing
-end
-
 local function getBlock(expected, createdList)
-    local best = nil
-    local bestDist = math.huge
+    local best, bestDist = nil, math.huge
     for _, b in ipairs(createdList) do
         if b and b:FindFirstChild("PPart") and b.Name == expected.Name then
             local dist = (b.PPart.Position - expected.Pos.Position).Magnitude
-            if dist < bestDist then
-                bestDist = dist
-                best = b
-            end
+            if dist < bestDist then bestDist = dist; best = b end
         end
     end
     return best
 end
 
-local function getPlayerBase() : Folder
-    for _,child in pairs(blocksFolder:GetChildren()) do
-        if child.Name == player.Name then
-            return child
-        end
-    end
-end
-
-local function pasteBuild(t, folder)
-    pastePercent = 0
-    local childrenDebug = 0
-    local c
-    local blocks = {}
-    local tCount = #t
-    local lastPlaced = tick()
-    c = folder.ChildAdded:Connect(function(child)
-        childrenDebug += 1
-        lastPlaced = tick()
-    end) 
-    for i,v in ipairs(t) do
-        placeBlock(v.Name,v.Pos,v.Relative,v.Anchored)
-        pastePercent += 50/tCount
-        if i % 20 == 0 then task.wait(0.05) end
-    end
-    repeat task.wait(0.1) until tick() - lastPlaced > 5
-    
-    local playerBaseList = folder:GetChildren()
-    for i,v in ipairs(t) do
-        local b = getBlock(v,playerBaseList)
-        rescaleBlock(b,v.Pos,v.Size)
-        paintBlock(b,v.Color)
-        setTransparency(v.Transparency,b)
-        if i % 20 == 0 then task.wait(0.05) end
-        pastePercent += 50/tCount
-    end
-    c:Disconnect()
-    pastePercent = 0
+local function getPlayerBase()
+    for _,child in pairs(blocksFolder:GetChildren()) do if child.Name == player.Name then return child end end
 end
 
 local function getPlayers()
     local playersy = {}
-    for _,playery in pairs(game:GetService("Players"):GetChildren()) do
-        table.insert(playersy,playery.DisplayName)
-    end
+    for _,playery in pairs(players:GetChildren()) do table.insert(playersy, playery.DisplayName) end
     return playersy
 end
 
-local function bringPlayer(playerToBring : Player , firstSeat : Seat, secondSeat : Seat) : ()
-    local originalPos = character:GetPivot()
-    local otherPlayerCharacter = playerToBring.Character
-    if not otherPlayerCharacter then return end
-    
-    local offset = firstSeat.CFrame:Inverse() * secondSeat.CFrame
-    repeat
-        local torso = otherPlayerCharacter:FindFirstChild("LowerTorso") or otherPlayerCharacter:FindFirstChild("Torso")
-        if torso then
-            local newPivot = torso.CFrame * offset:Inverse()
-            firstSeat:PivotTo(newPivot + Vector3.new(math.random(-1,1),math.random(-1,1),math.random(-1,1)))
-        end
-        task.wait(0.5)
-    until not otherPlayerCharacter.Parent or otherPlayerCharacter.Humanoid.SeatPart
-    firstSeat:PivotTo(originalPos)
-end
-
-local function getCar() : Model
-    return humanoid.SeatPart and humanoid.SeatPart.Parent or nil
-end
-
-local function getRealName(DisplayNamey : string) : string
-    for _,v in pairs(players:GetChildren()) do
-        if v.DisplayName == DisplayNamey then return v.Name end
-    end
+local function getRealName(DisplayNamey)
+    for _,v in pairs(players:GetChildren()) do if v.DisplayName == DisplayNamey then return v.Name end end
     return nil
 end
 
--- ВАЖНО: Загрузка WindUI
-local WindUI = loadstring(game:HttpGet("https://github.com/Footagesus/WindUI/releases/latest/download/main.lua"))()
-
-local Window = WindUI:CreateWindow({
-   Title = "Build A Boat Hub",
-   Icon = "rbxassetid://110383444005864",
-   Author = "by Sirius & WindUI"
-})
-
--- Ставим крутую тему по умолчанию
-WindUI:SetTheme("Violet")
--- ==========================================
--- КРУТЫЕ ТЕГИ СВЕРХУ (FPS И PING)
--- ==========================================
-local FPSTag = Window:Tag({
-    Title = "FPS: 0",
-    Color = Color3.fromRGB(100, 150, 255)
-})
-
-local lastUpdate = tick()
-local frameCount = 0
-runService.RenderStepped:Connect(function()
-    frameCount = frameCount + 1
-    local now = tick()
-    if now - lastUpdate >= 1 then
-        local fps = math.floor(frameCount / (now - lastUpdate))
-        FPSTag:SetTitle("FPS: " .. fps)
-        
-        if fps >= 50 then
-            FPSTag:SetColor(Color3.fromRGB(0, 255, 0)) -- Green
-        elseif fps >= 30 then
-            FPSTag:SetColor(Color3.fromRGB(255, 200, 0)) -- Yellow
-        else
-            FPSTag:SetColor(Color3.fromRGB(255, 0, 0)) -- Red
-        end
-        
-        frameCount = 0
-        lastUpdate = now
+local function showPreview(t)
+    previewFolder:ClearAllChildren()
+    if not t then return end
+    for _, v in ipairs(t) do
+        local p = Instance.new("Part")
+        p.Size = v.Size; p.CFrame = v.Pos; p.Color = v.Color; p.Transparency = 0.6; p.Material = Enum.Material.Neon
+        p.Anchored = true; p.CanCollide = false; p.CastShadow = false; p.Parent = previewFolder
     end
-end)
-
-local PingTag = Window:Tag({
-    Title = "Ping: 0ms",
-    Color = Color3.fromRGB(100, 200, 255)
-})
-
-task.spawn(function()
-    while true do
-        local success, ping = pcall(function()
-            local Stats = game:GetService("Stats")
-            local pingValue = Stats.Network.ServerStatsItem["Data Ping"]:GetValue()
-            return math.floor(pingValue)
-        end)
-        
-        if success and ping then
-            PingTag:SetTitle("Ping: " .. ping .. " ms")
-            if ping <= 50 then
-                PingTag:SetColor(Color3.fromRGB(0, 255, 0))
-            elseif ping <= 100 then
-                PingTag:SetColor(Color3.fromRGB(255, 200, 0))
-            elseif ping <= 200 then
-                PingTag:SetColor(Color3.fromRGB(255, 150, 0))
-            else
-                PingTag:SetColor(Color3.fromRGB(255, 0, 0))
-            end
-        end
-        task.wait(2)
-    end
-end)
-
--- ==========================================
--- СОЗДАНИЕ ВКЛАДОК
--- ==========================================
-local autoBuildTab = Window:Tab({Title = "Building", Icon = "hammer"})
-local autoFarmTab = Window:Tab({Title = "Auto Farm", Icon = "coins"})
-local funTab = Window:Tab({Title = "Fun Tab", Icon = "smile"})
-local settingsTab = Window:Tab({Title = "UI Settings", Icon = "settings"}) -- Новая вкладка для тем
-
--- НАСТРОЙКИ UI (Выбор тем из скриншота)
-settingsTab:Dropdown({
-    Title = "Select UI Theme",
-    Options = {"Dark", "Light", "Sky", "Violet", "Amber", "Emerald", "Rose", "Red"},
-    Callback = function(Value)
-        local val = type(Value) == "table" and Value[1] or Value
-        WindUI:SetTheme(val)
-        WindUI:Notify({Title = "Theme Applied", Content = "Current theme: " .. val, Duration = 3})
-    end
-})
-
--- BUILDING Вкладка
-autoBuildTab:Button({
-    Title = "Place Wood Block",
-    Callback = function() placeBlock("WoodBlock",HRP.CFrame,nil,true) end,
-})
-
-autoBuildTab:Toggle({
-    Title = "Rescale Block ( click block )",
-    Value = false,
-    Callback = function(Value) rescaleClick = Value end,
-})
-
-local mouse = player:GetMouse()
-mouse.Button1Down:Connect(function()
-    if rescaleClick and mouse.Target then
-        rescaleBlock(mouse.Target.Parent, mouse.Target.CFrame, Vector3.new(4,4,4))
-    end
-end)
+    WindUI:Notify({ Title = "Preview", Content = "Base displayed with semi-transparent blocks.", Duration = 3 })
+end
+-- BUILD TAB --
+local autoBuildTab = Window:Tab({ Title = "Building", Icon = "hammer", ShowTabTitle = true })
 
 local dd = autoBuildTab:Dropdown({
-    Title = "Choose Player Base To Copy",
-    Options = getPlayers(),
-    Callback = function(Value)
-        local val = type(Value) == "table" and Value[1] or Value
-        local realName = getRealName(val)
-        for _,folder in pairs(blocksFolder:GetChildren()) do
-            if folder.Name == realName then selectedBase = folder end
-        end
+    Title = "Select Player Base to Copy",
+    Values = getPlayers(),
+    Value = "None Selected",
+    Callback = function(Options)
+        local opt = type(Options) == "table" and Options[1] or Options
+        local realName = getRealName(opt)
+        for _,folder in pairs(blocksFolder:GetChildren()) do if folder.Name == realName then selectedBase = folder end end
     end,
 })
+players.PlayerAdded:Connect(function() dd:Refresh(getPlayers()) end)
 
-autoBuildTab:Button({
-    Title = "Copy Base",
-    Callback = function()
-        if selectedBase then clipboard = copyBuild(selectedBase)
-        else WindUI:Notify({Title = "Error", Content = "No Player Selected or Left", Duration = 5}) end
-    end,
-})
+autoBuildTab:Button({ Title = "Copy Base", Callback = function() if selectedBase then clipboard = copyBuild(selectedBase); WindUI:Notify({ Title = "Success", Content = "Copied!", Duration = 3 }) end end })
 
-autoBuildTab:Button({
-    Title = "Paste Base",
-    Callback = function()
-        if clipboard then pasteBuild(clipboard, getPlayerBase()) end
-    end,
-})
+autoBuildTab:Section({ Title = "Visualization" })
+autoBuildTab:Button({ Title = "Show Preview", Callback = function() if clipboard then showPreview(clipboard) end end })
+autoBuildTab:Button({ Title = "Clear Preview", Callback = function() previewFolder:ClearAllChildren() end })
 
--- Продвинутый Параграф с Иконкой (из скриншота 52682.jpg)
-local pasteStatus = autoBuildTab:Paragraph({
-    Title = "Auto Build Progress", 
-    Desc = "Status: Idle (0%)",
-    Image = "check-circle",
-    ImageSize = 20
-})
+autoBuildTab:Section({ Title = "Pasting" })
+local BuildProgress = autoBuildTab:ProgressBar({ Title = "Build Progress", Desc = "Idle...", Value = { Min = 0, Max = 100, Default = 0 } })
 
-task.spawn(function()
-    while task.wait(0.2) do
-        if pasteStatus and pasteStatus.Set then
-            local currentPercent = math.floor(pastePercent)
-            pasteStatus:Set({
-                Title = "Auto Build Progress", 
-                Desc = "Status: Building... " .. currentPercent .. "%"
-            })
-        end
+local function pasteBuild(t, folder)
+    previewFolder:ClearAllChildren()
+    local tCount = #t; if tCount == 0 then return end
+    
+    for i, v in ipairs(t) do
+        placeBlock(v.Name, v.Pos, v.Relative, v.Anchored)
+        BuildProgress:Set({ Value = math.floor((i / tCount) * 50), Desc = "Placing blocks (" .. i .. "/" .. tCount .. ")" })
+        if i % 20 == 0 then task.wait(0.05) end
     end
-end)
+    task.wait(1)
+    local playerBaseList = folder:GetChildren()
+    for i, v in ipairs(t) do
+        local b = getBlock(v, playerBaseList)
+        if b then rescaleBlock(b, v.Pos, v.Size); paintBlock(b, v.Color); setTransparency(v.Transparency, b) end
+        BuildProgress:Set({ Value = math.floor(50 + ((i / tCount) * 50)), Desc = "Applying properties (" .. i .. "/" .. tCount .. ")" })
+        if i % 20 == 0 then task.wait(0.05) end
+    end
+    BuildProgress:Set({ Value = 100, Desc = "Build Finished!" })
+end
+autoBuildTab:Button({ Title = "Paste Base", Callback = function() if clipboard then task.spawn(function() pasteBuild(clipboard, getPlayerBase()) end) end end })
+autoBuildTab:Toggle({ Title = "Ignore Anchored State", Value = true, Callback = function(Value) ignoreAnchored = Value end })
 
-autoBuildTab:Toggle({
-    Title = "Ignore Anchored State",
-    Value = true,
-    Callback = function(Value) ignoreAnchored = Value end,
+-- AUTO FARM TAB (NEW UPDATES HERE) --
+local autoFarmTab = Window:Tab({ Title = "Auto Farm", Icon = "coins", ShowTabTitle = true })
+
+local statsBox = autoFarmTab:Paragraph({ Title = "Farm Statistics", Desc = "Status: Inactive\nEarned Gold: 0\nEstimated Gold/Hour: 0" })
+
+-- Auto Farm Variables
+local startGold = 0
+local startTime = 0
+local currentEarned = 0
+local currentGPH = 0
+
+autoFarmTab:Toggle({ 
+    Title = "Toggle Auto Farm", 
+    Value = false, 
+    Callback = function(value) 
+        autofarm = value 
+        if value then
+            local goldNode = player:FindFirstChild("Data") and player.Data:FindFirstChild("Gold")
+            startGold = goldNode and goldNode.Value or 0
+            startTime = tick()
+        else
+            statsBox:Set({ Title = "Farm Statistics", Desc = "Status: Inactive\nEarned Gold: " .. currentEarned .. "\nEstimated Gold/Hour: 0" })
+        end
+    end 
 })
 
--- AUTO FARM Вкладка
-autoFarmTab:Toggle({
-    Title = "Auto Farm Toggle",
-    Value = false,
-    Callback = function(value) autofarm = value end,
+autoFarmTab:Section({ Title = "Discord Webhook API" })
+local webhookUrl = ""
+local webhookInterval = 5
+local enableWebhook = false
+
+autoFarmTab:Input({
+    Title = "Discord Webhook URL",
+    Placeholder = "https://discord.com/api/webhooks/...",
+    Callback = function(text) webhookUrl = text end
 })
 
--- FUN Вкладка
-local firstSeat = nil
-local secondSeat = nil
-
-local dd2 = funTab:Dropdown({
-    Title = "Choose Player To Lock Or Bring",
-    Options = getPlayers(),
-    Callback = function(Value)
-        local val = type(Value) == "table" and Value[1] or Value
-        local realName = getRealName(val)
-        playerToBring = players:FindFirstChild(realName)
-    end,
+autoFarmTab:Slider({
+    Title = "Send Interval (Minutes)",
+    Step = 1,
+    Value = { Min = 1, Max = 60, Default = 5 },
+    Callback = function(value) webhookInterval = value end
 })
 
--- Авто-обновление списков игроков каждую 1 секунду
+autoFarmTab:Toggle({ 
+    Title = "Enable Discord Logging", 
+    Value = false, 
+    Callback = function(value) enableWebhook = value end 
+})
+
+-- Stat calculation loop
 task.spawn(function()
     while task.wait(1) do
-        pcall(function()
-            if dd and dd.Refresh then dd:Refresh(getPlayers()) end
-            if dd2 and dd2.Refresh then dd2:Refresh(getPlayers()) end
-        end)
+        if autofarm then
+            local goldNode = player:FindFirstChild("Data") and player.Data:FindFirstChild("Gold")
+            if goldNode then
+                local currentGold = goldNode.Value
+                currentEarned = currentGold - startGold
+                local elapsedSeconds = tick() - startTime
+                
+                if elapsedSeconds > 0 then
+                    currentGPH = math.floor((currentEarned / elapsedSeconds) * 3600)
+                end
+                
+                statsBox:Set({ Title = "Farm Statistics", Desc = "Status: Active\nEarned Gold: " .. currentEarned .. "\nEstimated Gold/Hour: " .. currentGPH })
+            end
+        end
     end
 end)
 
-funTab:Button({
-    Title = "Sit In The First Seat and Click",
-    Callback = function() firstSeat = humanoid.SeatPart end,
-})
+-- Discord Webhook loop
+task.spawn(function()
+    local lastWebhookTime = tick()
+    while task.wait(1) do
+        if enableWebhook and autofarm and webhookUrl ~= "" then
+            if (tick() - lastWebhookTime) >= (webhookInterval * 60) then
+                lastWebhookTime = tick()
+                
+                local data = {
+                    content = "",
+                    embeds = {{
+                        title = "💰 BABFT Auto Farm Report",
+                        color = 3447003,
+                        fields = {
+                            { name = "Player", value = player.Name, inline = true },
+                            { name = "Earned Gold", value = tostring(currentEarned), inline = true },
+                            { name = "Est. Gold/Hour", value = tostring(currentGPH), inline = true }
+                        },
+                        footer = { text = "WindUI BABFT Ultimate" },
+                        timestamp = DateTime.now():ToIsoDate()
+                    }}
+                }
 
-funTab:Button({
-    Title = "Sit In The Second Seat and Click",
-    Callback = function() secondSeat = humanoid.SeatPart end,
-})
-
-funTab:Button({
-    Title = "Bring Player",
-    Callback = function()
-        if secondSeat and firstSeat and secondSeat ~= firstSeat then
-            if playerToBring then bringPlayer(playerToBring,firstSeat,secondSeat)
-            else WindUI:Notify({Title = "Error", Content = "Select Player!", Duration = 5}) end
-        else WindUI:Notify({Title = "Error", Content = "Select 2 Different Seats!", Duration = 5}) end
-    end,
-})
-
-funTab:Button({
-    Title = "Car Fly",
-    Callback = function()
-        local UserInputService = game:GetService("UserInputService")
-        local flying = false
-        local flySpeed = 50
-        local flyConnection
-        local bv 
-        
-        local screenGui = Instance.new("ScreenGui")
-        screenGui.Name = "CarFlyGUI"
-        screenGui.Parent = player:WaitForChild("PlayerGui")
-        
-        local frame = Instance.new("Frame", screenGui)
-        frame.Size = UDim2.new(0, 220, 0, 120)
-        frame.Position = UDim2.new(0.05, 0, 0.4, 0)
-        frame.BackgroundColor3 = Color3.fromRGB(163, 255, 137)
-        
-        local toggleButton = Instance.new("TextButton", frame)
-        toggleButton.Size, toggleButton.Position = UDim2.new(0, 100, 0, 30), UDim2.new(0, 10, 0, 10)
-        toggleButton.Text = "Toggle Fly"
-        
-        local speedLabel = Instance.new("TextLabel", frame)
-        speedLabel.Size, speedLabel.Position = UDim2.new(0, 50, 0, 30), UDim2.new(0, 120, 0, 10)
-        speedLabel.Text = tostring(flySpeed)
-        
-        local plusButton = Instance.new("TextButton", frame)
-        plusButton.Size, plusButton.Position, plusButton.Text = UDim2.new(0, 30, 0, 30), UDim2.new(0, 180, 0, 10), "+"
-        local minusButton = Instance.new("TextButton", frame)
-        minusButton.Size, minusButton.Position, minusButton.Text = UDim2.new(0, 30, 0, 30), UDim2.new(0, 180, 0, 50), "-"
-        
-        local destroyButton = Instance.new("TextButton", frame)
-        destroyButton.Size, destroyButton.Position = UDim2.new(0, 100, 0, 30), UDim2.new(0, 10, 0, 80)
-        destroyButton.Text, destroyButton.BackgroundColor3 = "Destroy GUI", Color3.fromRGB(255, 80, 80)
-
-        local ctrl = {f=0, b=0, l=0, r=0}
-        UserInputService.InputBegan:Connect(function(input, proc)
-            if proc then return end
-            if input.KeyCode == Enum.KeyCode.W then ctrl.f = 1 elseif input.KeyCode == Enum.KeyCode.S then ctrl.b = -1 end
-            if input.KeyCode == Enum.KeyCode.A then ctrl.l = -1 elseif input.KeyCode == Enum.KeyCode.D then ctrl.r = 1 end
-        end)
-        UserInputService.InputEnded:Connect(function(input)
-            if input.KeyCode == Enum.KeyCode.W then ctrl.f = 0 elseif input.KeyCode == Enum.KeyCode.S then ctrl.b = 0 end
-            if input.KeyCode == Enum.KeyCode.A then ctrl.l = 0 elseif input.KeyCode == Enum.KeyCode.D then ctrl.r = 0 end
-        end)
-
-        toggleButton.MouseButton1Click:Connect(function()
-            flying = not flying
-            local car = getCar()
-            if car and car.PrimaryPart then
-                local pPart = car.PrimaryPart
-                if flying then
-                    if not bv then bv = Instance.new("BodyVelocity", pPart); bv.MaxForce = Vector3.new(9e9, 9e9, 9e9) end
-                    if not flyConnection then
-                        flyConnection = runService.RenderStepped:Connect(function()
-                            if not flying then return end
-                            local cam = workspace.CurrentCamera
-                            local moveDir = (cam.CFrame.LookVector * (ctrl.f + ctrl.b)) + ((cam.CFrame * CFrame.new(ctrl.l + ctrl.r, 0, 0)).p - cam.CFrame.p)
-                            bv.Velocity = moveDir.Magnitude > 0 and moveDir.Unit * flySpeed or Vector3.zero
-                            pPart.CFrame = CFrame.new(pPart.Position, pPart.Position + cam.CFrame.LookVector)
-                        end)
-                    end
-                else
-                    if bv then bv:Destroy() bv = nil end
-                    if flyConnection then flyConnection:Disconnect() flyConnection = nil end
+                if httpRequest then
+                    pcall(function()
+                        httpRequest({
+                            Url = webhookUrl,
+                            Method = "POST",
+                            Headers = { ["Content-Type"] = "application/json" },
+                            Body = httpService:JSONEncode(data)
+                        })
+                    end)
                 end
             end
-        end)
+        end
+    end
+end)
 
-        plusButton.MouseButton1Click:Connect(function() flySpeed = flySpeed + 10; speedLabel.Text = tostring(flySpeed) end)
-        minusButton.MouseButton1Click:Connect(function() flySpeed = math.max(10, flySpeed - 10); speedLabel.Text = tostring(flySpeed) end)
-        destroyButton.MouseButton1Click:Connect(function()
-            flying = false
-            if bv then bv:Destroy() bv = nil end
-            if flyConnection then flyConnection:Disconnect() flyConnection = nil end
-            screenGui:Destroy()
-        end)
-    end,
+-- SETTINGS TAB --
+local settingsTab = Window:Tab({ Title = "Settings", Icon = "settings", ShowTabTitle = true })
+settingsTab:Dropdown({
+    Title = "Select Theme",
+    Values = {"Sky", "Violet", "Amber", "Emerald"},
+    Value = "Sky",
+    Callback = function(Options)
+        local theme = type(Options) == "table" and Options[1] or Options
+        WindUI:SetTheme(theme)
+    end
+})
+settingsTab:Button({
+    Title = "Destroy UI", 
+    Callback = function() 
+        previewFolder:ClearAllChildren()
+        for _,v in pairs(coreGui:GetChildren()) do if v.Name == "WindUI" then v:Destroy() end end
+    end 
 })
 
+-- Auto farm logic loop
 task.spawn(function()
     while true do
         task.wait()
-        if autofarm then
-            if not HRP then continue end
+        if autofarm and HRP then
             if index == 11 then
-                local Stages = workspace:FindFirstChild("BoatStages")
-                if not Stages then continue end
-                local endpoint = Stages:FindFirstChild("NormalStages") and Stages.NormalStages:FindFirstChild("TheEnd")
-                local chest = endpoint and endpoint:FindFirstChild("GoldenChest")
-                if not chest then continue end
-                HRP:PivotTo(chest:GetPivot() + Vector3.new(0,0,-10))
-                local ii = 0
-                repeat 
-                    task.wait(1) 
-                    ii += 1
-                    if ii % 20 == 0 then HRP:PivotTo(chest:GetPivot() + Vector3.new(0,0,-10)) end
-                    if not HRP then continue end
-                until (HRP.Position - chest:GetPivot().Position).Magnitude > 500
-                index = 1
+                local normalStages = workspace:FindFirstChild("BoatStages") and workspace.BoatStages:FindFirstChild("NormalStages")
+                local chest = normalStages and normalStages:FindFirstChild("TheEnd") and normalStages.TheEnd:FindFirstChild("GoldenChest")
+                if chest then
+                    HRP:PivotTo(chest:GetPivot() + Vector3.new(0,0,-10))
+                    local ii = 0
+                    repeat 
+                        task.wait(1); ii += 1
+                        if ii % 20 == 0 and HRP then HRP:PivotTo(chest:GetPivot() + Vector3.new(0,0,-10)) end
+                    until not HRP or (HRP.Position - chest:GetPivot().Position).Magnitude > 500
+                    index = 1
+                end
             else
-                local stages = workspace:FindFirstChild("BoatStages")
-                if not stages then continue end
-                local normalStages = stages:FindFirstChild("NormalStages")
-                local stage = normalStages and normalStages:FindFirstChild("CaveStage"..index)
-                local darkPart = stage and stage:FindFirstChild("DarknessPart")
-                if not darkPart then continue end
-                character:PivotTo(darkPart.CFrame - Vector3.new(0,0,15))
-                local tween2 = TS:Create(HRP,TweenInfo.new(2,Enum.EasingStyle.Linear),{CFrame = darkPart.CFrame + Vector3.new(0,0,20)})
-                tweening = true
-                tween2:Play()
-                tween2.Completed:Wait()
-                tweening = false
-                index += 1
+                local normalStages = workspace:FindFirstChild("BoatStages") and workspace.BoatStages:FindFirstChild("NormalStages")
+                local darkPart = normalStages and normalStages:FindFirstChild("CaveStage"..index) and normalStages["CaveStage"..index]:FindFirstChild("DarknessPart")
+                if darkPart then
+                    character:PivotTo(darkPart.CFrame - Vector3.new(0,0,15))
+                    local tween = TS:Create(HRP,TweenInfo.new(2,Enum.EasingStyle.Linear),{CFrame = darkPart.CFrame + Vector3.new(0,0,20)})
+                    tweening = true; tween:Play(); tween.Completed:Wait(); tweening = false
+                    index += 1
+                end
             end
         end
     end
 end)
 
-runService.Heartbeat:Connect(function()
-    if tweening then HRP.Velocity = Vector3.zero end
-end)
-
-player.CharacterAdded:Connect(function(charactery)
-    character = charactery
-    HRP = character:WaitForChild("HumanoidRootPart")
-    humanoid = character:WaitForChild("Humanoid")
-end)
+runService.Heartbeat:Connect(function() if tweening and HRP then HRP.Velocity = Vector3.zero end end)
+player.CharacterAdded:Connect(function(char) character, HRP, humanoid = char, char:WaitForChild("HumanoidRootPart"), char:WaitForChild("Humanoid") end)
 
 task.spawn(function()
-    while task.wait(100) do
-        vim:SendKeyEvent(true, Enum.KeyCode.Tilde, false, nil)
-        task.wait(0.1)
-        vim:SendKeyEvent(false, Enum.KeyCode.Tilde, false, nil)
-    end
+    while task.wait(100) do vim:SendKeyEvent(true, Enum.KeyCode.Tilde, false, nil); task.wait(0.1); vim:SendKeyEvent(false, Enum.KeyCode.Tilde, false, nil) end
 end)
