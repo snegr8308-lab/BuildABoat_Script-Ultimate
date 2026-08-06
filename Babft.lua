@@ -361,7 +361,7 @@ end)
 local settingsTab = Window:Tab({ Title = "Settings", Icon = "settings", ShowTabTitle = true })
 settingsTab:Dropdown({
     Title = "Select Theme",
-    Values = {"Sky", "Violet", "Amber", "Emerald"},
+    Values = {"Sky", "Violet", "Amber", "Emerald, Dark, Rainbow, Plant"},
     Value = "Sky",
     Callback = function(Options)
         local theme = type(Options) == "table" and Options[1] or Options
