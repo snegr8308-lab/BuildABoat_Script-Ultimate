@@ -21,6 +21,100 @@ env.httpRequest = (syn and syn.request) or (http and http.request) or http_reque
 -- flags & values --
 env.tweening = false
 env.index = 1
+env.customSaveFileName = ""
+env.selectedFileToLoad = nil
+
+-- Folder creation helper --
+local function ensureFolders()
+    if isfolder and makefolder then
+        pcall(function()
+            if not isfolder("Profix hub(Babft)") then makefolder("Profix hub(Babft)") end
+            if not isfolder("Profix hub(Babft)/assets") then makefolder("Profix hub(Babft)/assets") end
+            if not isfolder("Profix hub(Babft)/assets/buildings") then makefolder("Profix hub(Babft)/assets/buildings") end
+        end)
+    end
+end
+
+-- Get List of Saved Buildings --
+local function getSavedFiles()
+    ensureFolders()
+    local files = {}
+    if listfiles then
+        local success, fileList = pcall(function() return listfiles("Profix hub(Babft)/assets/buildings") end)
+        if success and fileList then
+            for _, file in ipairs(fileList) do
+                local name = file:match("([^\\/]+)%.json$")
+                if name then
+                    table.insert(files, name)
+                end
+            end
+        end
+    end
+    if #files == 0 then table.insert(files, "No Saved Files") end
+    return files
+end
+
+-- Save building data to JSON --
+local function saveBuildToFile(buildData, fileName)
+    if not buildData or #buildData == 0 then return end
+    ensureFolders()
+    
+    local serializableData = {}
+    for _, v in ipairs(buildData) do
+        table.insert(serializableData, {
+            Name = v.Name,
+            Pos = {v.Pos:GetComponents()},
+            Transparency = v.Transparency,
+            Anchored = v.Anchored,
+            Size = {v.Size.X, v.Size.Y, v.Size.Z},
+            Color = {v.Color.R, v.Color.G, v.Color.B}
+        })
+    end
+    
+    local success, json = pcall(function() return env.httpService:JSONEncode(serializableData) end)
+    if success and json and writefile then
+        local name = (fileName and fileName ~= "") and fileName or ("Build_" .. os.time())
+        name = name:gsub("[%c%s%p]", "_")
+        local filePath = "Profix hub(Babft)/assets/buildings/" .. name .. ".json"
+        pcall(function() writefile(filePath, json) end)
+    end
+end
+
+-- Load building data from JSON --
+local function loadBuildFromFile(fileName)
+    ensureFolders()
+    if not fileName or fileName == "No Saved Files" or fileName == "None Selected" then return nil end
+    local filePath = "Profix hub(Babft)/assets/buildings/" .. fileName .. ".json"
+    if not isfile or not isfile(filePath) or not readfile then return nil end
+    
+    local success, content = pcall(function() return readfile(filePath) end)
+    if not success or not content then return nil end
+    
+    local decodeSuccess, data = pcall(function() return env.httpService:JSONDecode(content) end)
+    if not decodeSuccess or type(data) ~= "table" then return nil end
+    
+    local myBase = nil
+    for _, v in pairs(env.workspace:GetChildren()) do
+        if v:FindFirstChild("TeamColor") and env.player.TeamColor and v.TeamColor.Value == env.player.TeamColor then
+            myBase = v
+            break
+        end
+    end
+
+    local loadedBuild = {}
+    for _, v in ipairs(data) do
+        table.insert(loadedBuild, {
+            Name = v.Name,
+            Pos = CFrame.new(unpack(v.Pos)),
+            Relative = myBase,
+            Transparency = v.Transparency,
+            Anchored = v.Anchored,
+            Size = Vector3.new(unpack(v.Size)),
+            Color = Color3.new(unpack(v.Color))
+        })
+    end
+    return loadedBuild
+end
 
 -- WindUI Initialization --
 local Version = "1.6.66"
@@ -213,6 +307,8 @@ end
 -- BUILD TAB --
 local autoBuildTab = env.Window:Tab({ Title = "Building", Icon = "hammer", ShowTabTitle = true })
 
+autoBuildTab:Section({ Title = "Copy Base" })
+
 local dd = autoBuildTab:Dropdown({
     Title = "Select Player Base to Copy",
     Values = getPlayers(),
@@ -225,7 +321,67 @@ local dd = autoBuildTab:Dropdown({
 })
 env.players.PlayerAdded:Connect(function() dd:Refresh(getPlayers()) end)
 
-autoBuildTab:Button({ Title = "Copy Base", Callback = function() if env.selectedBase then env.clipboard = copyBuild(env.selectedBase); env.WindUI:Notify({ Title = "Success", Content = "Copied!", Duration = 3 }) end end })
+autoBuildTab:Input({
+    Title = "Save File Name",
+    Placeholder = "Type file name (e.g. MyBuild)...",
+    Callback = function(text) env.customSaveFileName = text end
+})
+
+autoBuildTab:Button({ 
+    Title = "Copy & Save Base", 
+    Callback = function() 
+        if env.selectedBase then 
+            env.clipboard = copyBuild(env.selectedBase)
+            local nameToUse = (env.customSaveFileName and env.customSaveFileName ~= "") and env.customSaveFileName or env.selectedBase.Name
+            saveBuildToFile(env.clipboard, nameToUse)
+            env.WindUI:Notify({ Title = "Success", Content = "Copied & Saved as: " .. nameToUse, Duration = 3 }) 
+        end 
+    end 
+})
+
+autoBuildTab:Section({ Title = "Load Buildings" })
+
+local fileDropdown = autoBuildTab:Dropdown({
+    Title = "Select Saved Building File",
+    Values = getSavedFiles(),
+    Value = "None Selected",
+    Callback = function(Options)
+        local opt = type(Options) == "table" and Options[1] or Options
+        if opt ~= "No Saved Files" and opt ~= "None Selected" then
+            env.selectedFileToLoad = opt
+        else
+            env.selectedFileToLoad = nil
+        end
+    end,
+})
+
+-- Auto refresh file list every second --
+task.spawn(function()
+    local lastFilesStr = ""
+    while task.wait(1) do
+        local currentFiles = getSavedFiles()
+        local currentStr = table.concat(currentFiles, ",")
+        if currentStr ~= lastFilesStr then
+            lastFilesStr = currentStr
+            fileDropdown:Refresh(currentFiles)
+        end
+    end
+end)
+
+autoBuildTab:Button({
+    Title = "Load Selected File",
+    Callback = function()
+        if env.selectedFileToLoad then
+            local loaded = loadBuildFromFile(env.selectedFileToLoad)
+            if loaded and #loaded > 0 then
+                env.clipboard = loaded
+                env.WindUI:Notify({ Title = "Success", Content = "Loaded " .. #loaded .. " blocks from " .. env.selectedFileToLoad, Duration = 3 })
+            else
+                env.WindUI:Notify({ Title = "Error", Content = "Failed to load building file!", Duration = 3 })
+            end
+        end
+    end
+})
 
 autoBuildTab:Section({ Title = "Visualization" })
 autoBuildTab:Button({ Title = "Show Preview", Callback = function() if env.clipboard then showPreview(env.clipboard) end end })
@@ -534,7 +690,7 @@ autoFarmTab:Toggle({
 local settingsTab = Window:Tab({ Title = "Settings", Icon = "settings", ShowTabTitle = true })
 settingsTab:Dropdown({
     Title = "Select Theme",
-    Values = {"Sky", "Violet", "Amber", "Emerald"},
+    Values = {"Sky", "Violet", "Amber", "Emerald", "Dark", "Light", "Rose", "Plant", "Indigo", "Midnight", "Crimson", "Monokai Pro", "Cotton Candy", "Mellowsi", "Rainbow"},
     Value = "Sky",
     Callback = function(Options)
         local theme = type(Options) == "table" and Options[1] or Options
@@ -549,17 +705,6 @@ settingsTab:Button({
         for _,v in pairs(coreGui:GetChildren()) do if v.Name == "WindUI" then v:Destroy() end end
     end 
 })
-local getgenv = getgenv or function() return _G end
-local env = getgenv()
-
-local player = env.player
-local character = env.character
-local humanoid = env.humanoid
-local HRP = env.HRP
-local workspace = env.workspace
-local runService = env.runService
-local httpService = env.httpService
-local httpRequest = env.httpRequest
 
 -- Обновление золота каждую секунду и расчет статистики
 task.spawn(function()
